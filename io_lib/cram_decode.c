@@ -1345,8 +1345,46 @@ static int cram_decode_seq(cram_fd *fd, cram_container *c, cram_slice *s,
     ref_pos--; // count from 0
     cr->cigar = ncigar;
 
+    uint32_t FPa[1024], *FPp = FPa;
+
     if (!(ds & (CRAM_FC | CRAM_FP)))
 	goto skip_cigar;
+    
+    if (CRAM_MAJOR_VERS(fd->version) >= 4 && (ds & CRAM_FP)) {
+	if (fn > 1024) {
+	    FPp = malloc(fn * sizeof(*FPp));
+	    if (!FPp)
+		return -1;
+	}
+	if (!(cr->flags & BAM_FREVERSE)) {
+	    prev_pos = cr->len;
+	    for (f = fn-1; f >= 0; f--) {
+		uint32_t pos = 0;
+		if (!c->comp_hdr->codecs[DS_FP]) return -1;
+		r |= c->comp_hdr->codecs[DS_FP]->decode(s,
+							c->comp_hdr->codecs[DS_FP],
+							blk,
+							(char *)&pos, &out_sz);
+		if (r) return r;
+		pos = prev_pos - pos;
+		FPp[f] = pos;
+		prev_pos = pos;
+	    }
+	} else {
+	    for (f = 0; f < fn; f++) {
+		uint32_t pos = 0;
+		if (!c->comp_hdr->codecs[DS_FP]) return -1;
+		r |= c->comp_hdr->codecs[DS_FP]->decode(s,
+							c->comp_hdr->codecs[DS_FP],
+							blk,
+							(char *)&pos, &out_sz);
+		if (r) return r;
+		pos += prev_pos;
+		FPp[f] = pos;
+		prev_pos = pos;
+	    }
+	}
+    }
 
     for (f = 0; f < fn; f++) {
 	int32_t pos = 0;
@@ -1371,13 +1409,17 @@ static int cram_decode_seq(cram_fd *fd, cram_container *c, cram_slice *s,
 	if (!(ds & CRAM_FP))
 	    continue;
 
-	if (!c->comp_hdr->codecs[DS_FP]) return -1;
-	r |= c->comp_hdr->codecs[DS_FP]->decode(s,
-						c->comp_hdr->codecs[DS_FP],
-						blk,
-						(char *)&pos, &out_sz);
-	if (r) return r;
-	pos += prev_pos;
+	if (CRAM_MAJOR_VERS(fd->version) < 4) {
+	    if (!c->comp_hdr->codecs[DS_FP]) return -1;
+	    r |= c->comp_hdr->codecs[DS_FP]->decode(s,
+						    c->comp_hdr->codecs[DS_FP],
+						    blk,
+						    (char *)&pos, &out_sz);
+	    if (r) return r;
+	    pos += prev_pos;
+	} else {
+	    pos = FPp[f];
+	}
 
 	if (pos <= 0) {
 	    fprintf(stderr, "Error: feature position %d before start of read.\n",
@@ -1899,6 +1941,9 @@ static int cram_decode_seq(cram_fd *fd, cram_container *c, cram_slice *s,
     }
 
  skip_cigar:
+
+    if (FPp != FPa)
+	free(FPp);
 
     if ((ds & CRAM_FN) && decode_md) {
 	if (md_dist >= 0)

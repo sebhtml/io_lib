@@ -618,14 +618,38 @@ static int cram_encode_slice_read(cram_fd *fd,
 
 	r |= h->codecs[DS_FN]->encode(s, h->codecs[DS_FN],
 				      (char *)&cr->nfeature, 1);
+
+        if (CRAM_MAJOR_VERS(fd->version) >= 4) {
+	    int jstart, jend, jinc;
+	    if (!(cr->flags & BAM_FREVERSE)) {
+		prev_pos = cr->len;
+		jstart = cr->nfeature-1;
+		jend = -1;
+		jinc = -1;
+	    } else {
+		prev_pos = 0;
+		jstart = 0;
+		jend = cr->nfeature;
+		jinc = +1;
+	    }
+	    for (j = jstart; j != jend; j+=jinc) {
+		cram_feature *f = &s->features[cr->feature + j];
+		i32 = ABS(prev_pos - f->X.pos);
+		r |= h->codecs[DS_FP]->encode(s, h->codecs[DS_FP], (char *)&i32, 1);
+		prev_pos = f->X.pos;
+	    }
+	}
+
 	for (j = 0; j < cr->nfeature; j++) {
 	    cram_feature *f = &s->features[cr->feature + j];
 
 	    uc = f->X.code;
 	    r |= h->codecs[DS_FC]->encode(s, h->codecs[DS_FC], (char *)&uc, 1);
-	    i32 = f->X.pos - prev_pos;
-	    r |= h->codecs[DS_FP]->encode(s, h->codecs[DS_FP], (char *)&i32, 1);
-	    prev_pos = f->X.pos;
+	    if (CRAM_MAJOR_VERS(fd->version) < 4) {
+		i32 = f->X.pos - prev_pos;
+		r |= h->codecs[DS_FP]->encode(s, h->codecs[DS_FP], (char *)&i32, 1);
+		prev_pos = f->X.pos;
+	    }
 
 	    switch(f->X.code) {
 		//char *seq;
