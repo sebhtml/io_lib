@@ -390,6 +390,10 @@ unsigned char *compress_block_fqz2f(int vers,
 	if (dsqr[i] > (1<<q_dctxbits)-1)
 	    dsqr[i] = (1<<q_dctxbits)-1;
 
+    comp[comp_idx++] = (q_qctxbits<<4)|q_qctxshift;
+    comp[comp_idx++] = (q_qloc<<4)|q_sloc;
+    comp[comp_idx++] = (q_ploc<<4)|q_dloc;
+
     if (store_qmap) {
 	comp[comp_idx++] = nsym;
 	int comp_idx_start = comp_idx;
@@ -402,10 +406,6 @@ unsigned char *compress_block_fqz2f(int vers,
 	for (i = 0; i < 256; i++)
 	    qhist[i] = i;
     }
-
-    comp[comp_idx++] = (q_qctxbits<<4)|q_qctxshift;
-    comp[comp_idx++] = (q_qloc<<4)|q_sloc;
-    comp[comp_idx++] = (q_ploc<<4)|q_dloc;
 
     // Produce ptab from pctxshift.
     if (q_qctxbits) {
@@ -439,17 +439,17 @@ unsigned char *compress_block_fqz2f(int vers,
 
 //	// Eg a particular novaseq run, 2.8% less, -x 0xa2302108ae
 //	i = j = 0;
-//	while (i <= 10)  ptab[i++] = j;  j++;
-//	while (i <= 12)  ptab[i++] = j;  j++;
-//	while (i <= 22)  ptab[i++] = j;  j++;
-//	while (i <= 24)  ptab[i++] = j;  j++;
-//	while (i <= 27)  ptab[i++] = j;  j++;
-//	while (i <= 37)  ptab[i++] = j;  j++;
-//	while (i <= 83)  ptab[i++] = j;  j++;
-//	while (i <= 95)  ptab[i++] = j;  j++;
-//	while (i <= 127) ptab[i++] = j;  j++;
-//	while (i <= 143) ptab[i++] = j;  j++;
-//	while (i <= 1023)ptab[i++] = j;  j++;
+//	while (i <= 10)  {ptab[i++] = j;}  j++;
+//	while (i <= 12)  {ptab[i++] = j;}  j++;
+//	while (i <= 22)  {ptab[i++] = j;}  j++;
+//	while (i <= 24)  {ptab[i++] = j;}  j++;
+//	while (i <= 27)  {ptab[i++] = j;}  j++;
+//	while (i <= 37)  {ptab[i++] = j;}  j++;
+//	while (i <= 83)  {ptab[i++] = j;}  j++;
+//	while (i <= 95)  {ptab[i++] = j;}  j++;
+//	while (i <= 127) {ptab[i++] = j;}  j++;
+//	while (i <= 143) {ptab[i++] = j;}  j++;
+//	while (i <= 1023){ptab[i++] = j;}  j++;
 
 	// custom ptab
 	comp_idx += store_array(comp+comp_idx, ptab, 1024);
@@ -531,7 +531,7 @@ unsigned char *compress_block_fqz2f(int vers,
     // Therefore during decode we'll need to do two passes, first to decode
     // and perform delta, and second to reverse back again.
     // These two can be merged with a bit of cleverness, but we do it simply for now.
-    int read2 = 0;
+    int read2 = 0, pos = 0;
     for (i = j = 0; i < in_size; i++, j--) {
 	if (j == 0) {
 	    // Quality buffer maybe longer than sum of reads if we've
@@ -561,7 +561,7 @@ unsigned char *compress_block_fqz2f(int vers,
 
 	    rec++;
 	    j = len;
-	    delta = last = qlast = q1 = 0;
+	    pos = delta = last = qlast = q1 = 0;
 
 	    if (do_dedup) {
 		// Possible dup of previous read?
@@ -584,13 +584,14 @@ unsigned char *compress_block_fqz2f(int vers,
 
 	qlast = (qlast<<q_qctxshift) + qtab[qhist[q]];
 	last = (qlast & ((1<<q_qctxbits)-1)) << q_qloc;
-	last += ptab[MIN(j,1024)]; //limits max pos
+	last += ptab[MIN(pos,1024)]; //limits max pos
 	last += stab[read2];
 	last += dtab[delta];
 
 	last &= 0xffff;
         //_mm_prefetch((const char *)&model_qual[last], _MM_HINT_T0);
 
+	pos++;
 	delta += (q1 != q);
 	q1 = q;
     }
@@ -676,10 +677,16 @@ unsigned char *uncompress_block_fqz2f(cram_slice *s,
     int store_qmap = flags&1;
     int max_sym    = in[in_idx++];
 
-    int nsym = store_qmap ? in[in_idx++] : 255;
-    int qmap[256];
+    int q_qctxbits = in[in_idx]>>4;
+    int q_qctxshift= in[in_idx++]&15;
+    int q_qloc     = in[in_idx]>>4;
+    int q_sloc     = in[in_idx++]&15;
+    int q_ploc     = in[in_idx]>>4;
+    int q_dloc     = in[in_idx++]&15;
 
-    if (nsym <= 8) {
+    int qmap[256];
+    if (store_qmap) {
+	int nsym = in[in_idx++];
 	for (i = 0; i < nsym; i++)
 	    qmap[i] = in[in_idx++];
 	max_sym = nsym;
@@ -687,13 +694,6 @@ unsigned char *uncompress_block_fqz2f(cram_slice *s,
 	for (i = 0; i < 256; i++)
 	    qmap[i] = i;
     }
-
-    int q_qctxbits = in[in_idx]>>4;
-    int q_qctxshift= in[in_idx++]&15;
-    int q_qloc     = in[in_idx]>>4;
-    int q_sloc     = in[in_idx++]&15;
-    int q_ploc     = in[in_idx]>>4;
-    int q_dloc     = in[in_idx++]&15;
 
     // Produce ptab from pctxshift.
     if (q_qctxbits) {
@@ -752,7 +752,7 @@ unsigned char *uncompress_block_fqz2f(cram_slice *s,
     if (!rev_a || !len_a)
 	return NULL;
 
-    int last_len = 0, read2 = 0;
+    int last_len = 0, read2 = 0, pos = 0;
     for (rec = i = j = 0; i < len; i++, j--) {
 	if (rec >= nrec) {
 	    nrec *= 2;
@@ -792,7 +792,7 @@ unsigned char *uncompress_block_fqz2f(cram_slice *s,
 
 	    rec++;
 	    j = len;
-	    delta = last = qlast = q1 = 0;
+	    pos = delta = last = qlast = q1 = 0;
 	}
 
 	unsigned char q, Q;
@@ -802,12 +802,13 @@ unsigned char *uncompress_block_fqz2f(cram_slice *s,
 
 	qlast = (qlast<<q_qctxshift) + qtab[Q];
 	last = (qlast & ((1<<q_qctxbits)-1)) << q_qloc;
-	last += ptab[MIN(j,1024)]; //limits max pos
+	last += ptab[MIN(pos,1024)]; //limits max pos
 	last += stab[read2];
 	last += dtab[delta];
 
 	last &= 0xffff;
 
+	pos++;
 	delta += (q1 != q) * (delta<255);
 	q1 = q;
         uncomp[i] = q;
